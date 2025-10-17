@@ -1,0 +1,147 @@
+# Import required libraries
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+import matplotlib.pyplot as plt
+import numpy as np
+import sys
+import os
+
+
+def run_sentiment_analysis():
+    """
+    Loads the winemag-data-130k-v2.csv, creates a binary sentiment label from
+    the 'points' column, performs sentiment analysis, and plots the results.
+    """
+    # Define file and columns specific to the uploaded dataset
+    file_path = "winemag-data-130k-v2.csv"
+    text_column = 'description'
+    points_column = 'points'
+    sentiment_label = 'is_high_score'  # New target column we will create
+
+    print(f"--- Sentiment Analysis for Wine Reviews ({file_path}) ---")
+
+    # 1. Load Data and Preprocessing
+    try:
+        if not os.path.exists(file_path):
+            print(f"\nError: File not found at '{file_path}'. Please ensure the file is accessible.")
+            sys.exit(1)
+
+        # Attempt to read the CSV file
+        # The file has an unnamed index column we should ignore
+        df = pd.read_csv(file_path, index_col=0)
+
+        # Check for necessary columns
+        if text_column not in df.columns or points_column not in df.columns:
+            print("\nError: The required 'description' or 'points' columns were not found.")
+            sys.exit(1)
+
+        # Drop rows with any missing values in the relevant columns
+        df.dropna(subset=[text_column, points_column], inplace=True)
+
+        # Data Cleaning: Convert 'points' to numeric (just in case)
+        df[points_column] = pd.to_numeric(df[points_column], errors='coerce')
+        df.dropna(subset=[points_column], inplace=True)
+
+        # FEATURE ENGINEERING: Create the binary sentiment label (0 or 1)
+        # We will classify reviews with 90 points or higher as Positive (1)
+        # and those below 90 points as Negative/Neutral (0).
+        df[sentiment_label] = (df[points_column] >= 90).astype(int)
+
+        # Check if we have enough data after cleaning
+        if df.empty:
+            print("\nError: DataFrame is empty after cleaning. Check your file content.")
+            sys.exit(1)
+
+        print(f"\nSuccessfully loaded {len(df)} rows.")
+        print(f"Sentiment Distribution (0=Below 90 points, 1=90+ points):")
+        print(df[sentiment_label].value_counts(normalize=True))
+
+    except Exception as e:
+        print(f"\nAn error occurred during file processing: {e}")
+        sys.exit(1)
+
+    # Prepare data for modeling
+    X = df[text_column]
+    y = df[sentiment_label]
+
+    # Split data into train and test sets (stratify ensures balanced sentiment classes)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+    # Vectorize text data using TF-IDF
+    print("\nVectorizing text data using TF-IDF (Max 5000 features)...")
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=5000, ngram_range=(1, 2))
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
+    print(f"Vectorizer fit with {len(vectorizer.get_feature_names_out())} features.")
+
+    # Dictionary to store model names and accuracies
+    model_accuracies = {}
+
+    # 2. Model Training and Evaluation
+
+    # Logistic Regression Model (Often very effective for text classification)
+    print("\n--- Training Logistic Regression ---")
+    logreg = LogisticRegression(solver='liblinear', random_state=42, C=1.0)  # C=1.0 is default regularization
+    logreg.fit(X_train_vec, y_train)
+    logreg_pred = logreg.predict(X_test_vec)
+    logreg_acc = accuracy_score(y_test, logreg_pred)
+    model_accuracies['Logistic Regression'] = logreg_acc
+    print(f"Accuracy: {logreg_acc:.4f}")
+    print(classification_report(y_test, logreg_pred, zero_division=0))
+
+    # Decision Tree Model (Simple, but can overfit high-dimensional text data)
+    print("\n--- Training Decision Tree ---")
+    dtree = DecisionTreeClassifier(random_state=42, max_depth=20)  # Limit depth slightly
+    dtree.fit(X_train_vec, y_train)
+    dtree_pred = dtree.predict(X_test_vec)
+    dtree_acc = accuracy_score(y_test, dtree_pred)
+    model_accuracies['Decision Tree'] = dtree_acc
+    print(f"Accuracy: {dtree_acc:.4f}")
+    print(classification_report(y_test, dtree_pred, zero_division=0))
+
+    # Ensemble Method - Random Forest (More robust against overfitting than a single tree)
+    print("\n--- Training Random Forest ---")
+    rf = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=20)  # Limit depth
+    rf.fit(X_train_vec, y_train)
+    rf_pred = rf.predict(X_test_vec)
+    rf_acc = accuracy_score(y_test, rf_pred)
+    model_accuracies['Random Forest'] = rf_acc
+    print(f"Accuracy: {rf_acc:.4f}")
+    print(classification_report(y_test, rf_pred, zero_division=0))
+
+    # 3. Visualization of Model Performance
+    print("\nGenerating visualization...")
+    models = list(model_accuracies.keys())
+    accuracies = list(model_accuracies.values())
+
+    plt.figure(figsize=(10, 6))
+    bars = plt.bar(models, accuracies, color=['#4ade80', '#facc15', '#3b82f6'])
+
+    # Dynamic Y-axis limit adjustment
+    min_acc = min(accuracies) if accuracies else 0.0
+    max_acc = max(accuracies) if accuracies else 1.0
+    plt.ylim(max(0.0, min_acc - 0.05), min(1.0, max_acc + 0.05))
+
+    # FIX: Use a raw string (r'...') to prevent the SyntaxWarning caused by LaTeX backslashes like '\g' in the title.
+    plt.title(r'Comparison of Model Accuracies for Wine Review Sentiment (Points $\geq 90$)', fontsize=16,
+              fontweight='bold')
+    plt.xlabel('Classifier Model', fontsize=14)
+    plt.ylabel('Accuracy Score', fontsize=14)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+    # Add accuracy values on top of the bars
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2, yval + 0.005, f'{yval:.4f}', ha='center', va='bottom', fontsize=12)
+
+    plt.show()
+
+
+# Run the main function
+if __name__ == "__main__":
+    run_sentiment_analysis()
